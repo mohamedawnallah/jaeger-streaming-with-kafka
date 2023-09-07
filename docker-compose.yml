@@ -1,0 +1,115 @@
+version: "2.1"
+
+services:
+  zookeeper:
+    image: bitnami/zookeeper
+    ports:
+      - 2181:2181
+    environment:
+      - ALLOW_ANONYMOUS_LOGIN=yes
+  kafka:
+    image: 'bitnami/kafka:latest'
+    ports:
+      - '9092:9092'
+      - '9094:9094'
+    environment:
+      - KAFKA_BROKER_ID=1
+      - KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1
+      - KAFKA_CFG_ZOOKEEPER_CONNECT=zookeeper:2181
+      - ALLOW_PLAINTEXT_LISTENER=yes
+      - KAFKA_LISTENERS=INTERNAL://0.0.0.0:9092,OUTSIDE://0.0.0.0:9094
+      - KAFKA_ADVERTISED_LISTENERS=INTERNAL://kafka:9092,OUTSIDE://localhost:9094
+      - KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=INTERNAL:PLAINTEXT,OUTSIDE:PLAINTEXT
+      - KAFKA_INTER_BROKER_LISTENER_NAME=INTERNAL
+    restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-topics.sh --list --bootstrap-server 127.0.0.1:9092"]
+      interval: 5s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    depends_on:
+      - zookeeper
+
+  hotrod:
+    image: jaegertracing/example-hotrod:latest
+    ports:
+      - '8080:8080'
+      - '8083:8083'
+    command: [ "all", "--otel-exporter=otlp" ]
+    environment:
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger-collector:4318
+    depends_on:
+      jaeger-collector:
+        condition: service_healthy
+
+  jaeger-collector:
+    image: jaegertracing/jaeger-collector
+    command:
+      - "--collector.otlp.enabled=true"
+      - "--log-level=debug"
+    ports:
+      - 4318:4318
+      - 14250:14250
+    environment:
+      - SPAN_STORAGE_TYPE=kafka
+      - KAFKA_PRODUCER_BROKERS=kafka:9092
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:14269/ || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 3
+    depends_on:
+      kafka:
+        condition: service_healthy
+
+  jaeger-ingester:
+    image: jaegertracing/jaeger-ingester
+    container_name: jaeger-ingester
+    environment:
+      - SPAN_STORAGE_TYPE=elasticsearch
+      - ES_SERVER_URLS=http://elasticsearch:9200
+      - KAFKA_CONSUMER_BROKERS=kafka:9092
+      - KAFKA_TOPIC=jaeger-spans
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:14270/ || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 3
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      jaeger-collector:
+        condition: service_healthy
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:7.12.1
+    container_name: elasticsearch
+    environment:
+      - discovery.type=single-node
+    ports:
+      - "9200:9200"
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail http://localhost:9200/_cluster/health || exit 1"]
+      interval: 20s
+      timeout: 20s
+      retries: 3
+
+  jaeger-query:
+    image: jaegertracing/jaeger-query
+    environment:
+      - SPAN_STORAGE_TYPE=elasticsearch
+      - ES_SERVER_URLS=http://elasticsearch:9200
+    ports:
+      - "16686:16686"
+      - "16687"
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:16687/ || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 3
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
