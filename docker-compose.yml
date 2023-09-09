@@ -113,3 +113,13 @@ services:
     depends_on:
       elasticsearch:
         condition: service_healthy
+
+  jaeger-spark-dependencies:
+    image: jaegertracing/spark-dependencies
+    environment:
+      - STORAGE=elasticsearch
+      - ES_NODES=http://elasticsearch:9200
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    mem_limit: 2g
